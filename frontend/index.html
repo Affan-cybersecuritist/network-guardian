@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Network Guardian — AI Intrusion Detection</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="scanline-overlay"></div>
+
+<header class="topbar">
+  <div class="brand">
+    <div class="brand-mark">
+      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+        <path d="M14 2L4 6.5V13.5C4 19.8 8.4 25.5 14 27C19.6 25.5 24 19.8 24 13.5V6.5L14 2Z" stroke="var(--safe-teal)" stroke-width="1.6"/>
+        <path d="M9 14L12.5 17.5L19 10.5" stroke="var(--safe-teal)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </div>
+    <div>
+      <h1>Network Guardian</h1>
+      <p class="eyebrow">Behavior-based intrusion detection · not signature matching</p>
+    </div>
+  </div>
+  <div class="status-pill" id="status-pill">
+    <span class="dot"></span>
+    <span id="status-text">Connecting…</span>
+  </div>
+</header>
+
+<section class="stat-strip" id="stat-strip">
+  <div class="stat-card">
+    <span class="stat-label">ROC-AUC</span>
+    <span class="stat-value" id="stat-auc">—</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Attack Precision</span>
+    <span class="stat-value" id="stat-precision">—</span>
+  </div>
+  <div class="stat-card highlight">
+    <span class="stat-label">Unseen-Attack Detection</span>
+    <span class="stat-value" id="stat-novel">—</span>
+  </div>
+  <div class="stat-card">
+    <span class="stat-label">Connections Analyzed</span>
+    <span class="stat-value" id="stat-count">0</span>
+  </div>
+</section>
+
+<section class="pulse-section">
+  <div class="pulse-header">
+    <div>
+      <span class="section-label">00 / Analyze Real Traffic</span>
+      <p class="section-sub">Upload a .pcap/.pcapng capture — features are computed from the actual packets, not sample data.</p>
+    </div>
+    <div class="controls">
+      <input type="file" id="pcap-input" accept=".pcap,.pcapng" style="display:none" />
+      <button id="upload-btn" class="btn-primary">Upload Capture</button>
+    </div>
+  </div>
+  <div id="upload-status" class="upload-status"></div>
+</section>
+
+<section class="pulse-section">
+  <div class="pulse-header">
+    <div>
+      <span class="section-label">01 / Live Packet Capture</span>
+      <p class="section-sub">Sniffs a real network interface continuously and scores connections as they happen. Requires Npcap + Administrator on Windows.</p>
+    </div>
+    <div class="controls">
+      <label class="ratio-control">
+        Interface
+        <select id="iface-select"></select>
+      </label>
+      <button id="live-toggle-btn" class="btn-primary">Start Live Capture</button>
+    </div>
+  </div>
+  <div id="live-status" class="upload-status">Not connected.</div>
+</section>
+
+<section class="pulse-section">
+  <div class="pulse-header">
+    <div>
+      <span class="section-label">02 / Live Traffic Pulse</span>
+      <p class="section-sub">Each spike is a scored connection. Height = anomaly risk, not packet size.</p>
+    </div>
+    <div class="controls">
+      <label class="ratio-control">
+        Attack mix
+        <input type="range" id="ratio-slider" min="0" max="80" value="30" />
+        <span id="ratio-label">30%</span>
+      </label>
+      <button id="toggle-btn" class="btn-primary">Pause Monitoring</button>
+    </div>
+  </div>
+  <canvas id="pulse-canvas"></canvas>
+</section>
+
+<section class="feed-section">
+  <span class="section-label">03 / Connection Feed</span>
+  <p class="section-sub">Live-scored traffic, most recent first. Click a row to see why it was flagged.</p>
+
+  <div class="feed-table">
+    <div class="feed-row feed-row--head">
+      <span>Risk</span>
+      <span>Protocol</span>
+      <span>Service</span>
+      <span>Flag</span>
+      <span>Bytes (src→dst)</span>
+      <span>Ground truth</span>
+    </div>
+    <div id="feed-body"></div>
+  </div>
+</section>
+
+<footer class="footer">
+  <p>Model: Isolation Forest trained exclusively on normal-traffic baselines · Dataset: NSL-KDD · Built for the SIH-style problem: detect compromise without relying only on Indicators of Compromise.</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>
