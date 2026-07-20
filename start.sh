@@ -7,8 +7,8 @@ set -e
 cd "$(dirname "$0")"
 
 echo "Checking dependencies..."
-pip install -q pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests --break-system-packages 2>/dev/null || \
-pip install -q pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests
+pip install -q pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests shap --break-system-packages 2>/dev/null || \
+pip install -q pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests shap
 
 if [ ! -f "models/isolation_forest.joblib" ]; then
     echo "No trained model found — training now (one-time, ~30 seconds)..."

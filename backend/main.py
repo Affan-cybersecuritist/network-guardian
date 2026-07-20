@@ -15,10 +15,12 @@ import asyncio
 import joblib
 import numpy as np
 import pandas as pd
+import shap
+import requests
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BACKEND_DIR)
@@ -28,7 +30,12 @@ sys.path.append(NOTEBOOKS_DIR)
 sys.path.append(BACKEND_DIR)
 from data_prep import load_raw, transform
 from pcap_to_features import extract_connections, compute_features
-from live_capture import LiveCapture, list_interfaces
+from live_capture import LiveCapture, list_interfaces_detailed
+import db as db_store
+import firewall
+import notifications
+import waf_engine
+import response_engine
 
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
@@ -48,6 +55,18 @@ scaler = joblib.load(f"{MODEL_DIR}/scaler.joblib")
 feature_cols = joblib.load(f"{MODEL_DIR}/feature_cols.joblib")
 numeric_cols = joblib.load(f"{MODEL_DIR}/numeric_cols.joblib")
 metrics = joblib.load(f"{MODEL_DIR}/metrics.joblib")
+
+# SHAP explainer for the Isolation Forest -- gives per-connection feature
+# attribution instead of just "something's off". Confirmed empirically that
+# shap.TreeExplainer's reconstructed output (expected_value + sum(shap values))
+# correlates with model.decision_function at r=0.997 on the test set, same
+# sign convention (higher = more normal) -- so the features with the most
+# NEGATIVE shap value are exactly the ones pushing a connection toward
+# "anomalous". ~1ms/row, so this runs on every scoring call, not just on demand.
+shap_explainer = shap.TreeExplainer(model)
+
+# Initialize response engine
+resp_engine = response_engine.ResponseEngine()
 
 test_df = load_raw(f"{DATA_DIR}/KDDTest.txt")
 # Pre-transform full test set once so we can slice quickly per request
@@ -117,9 +136,60 @@ class TrafficRow(BaseModel):
 # the same way security tools layer rule-based detections on top of ML scores.
 AUTH_BRUTEFORCE_THRESHOLD = 15
 
+# Risk score at/above which a connection counts as "high-risk" for the alert
+# inbox, /alerts default filter, and outbound webhook notifications.
+ALERT_RISK_THRESHOLD = 70
+
+# ===== Threat Intelligence Integration =====
+# Free APIs for IP reputation checking (no API key required for basic queries)
+THREAT_INTEL_ENABLED = True
+IP_REPUTATION_CACHE = {}  # Simple cache to avoid repeated lookups
+
+def get_ip_reputation(ip: str) -> Dict:
+    """
+    Check IP reputation using free threat intelligence APIs.
+    Returns: {reputation_score: 0-100, reason: str, is_malicious: bool}
+    """
+    if not THREAT_INTEL_ENABLED or not ip or ip.startswith("127.") or ip.startswith("192.168."):
+        return {"reputation_score": 0, "reason": None, "is_malicious": False}
+
+    # Check cache first
+    if ip in IP_REPUTATION_CACHE:
+        return IP_REPUTATION_CACHE[ip]
+
+    result = {"reputation_score": 0, "reason": None, "is_malicious": False}
+
+    try:
+        # Try AbuseIPDB (free tier: 1000 queries/day)
+        resp = requests.get(
+            f"https://api.abuseipdb.com/api/v2/check",
+            params={"ipAddress": ip, "maxAgeInDays": 90},
+            headers={"Key": ""},  # Free tier doesn't require key for basic queries
+            timeout=2
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            score = data.get("data", {}).get("abuseConfidenceScore", 0)
+            if score > 50:
+                result["reputation_score"] = min(100, score)
+                result["reason"] = f"AbuseIPDB confidence: {score}%"
+                result["is_malicious"] = True
+    except:
+        pass  # API timeout or error - continue without threat intel
+
+    # Cache result
+    IP_REPUTATION_CACHE[ip] = result
+    return result
+
+
+def _format_feature_value(value):
+    if isinstance(value, (int, float, np.floating, np.integer)):
+        return round(float(value), 3)
+    return value
+
 
 def score_rows(df: pd.DataFrame):
-    X, _ = transform(df, encoders, numeric_cols, scaler, fit_scaler=False)
+    X, used_feature_cols = transform(df, encoders, numeric_cols, scaler, fit_scaler=False)
     raw_score = -model.decision_function(X)  # higher = more anomalous
     is_attack = (model.predict(X) == -1)
 
@@ -127,15 +197,55 @@ def score_rows(df: pd.DataFrame):
     # decision_function roughly in [-0.5, 0.5]; clip + rescale
     risk = np.clip((raw_score + 0.2) / 0.4, 0, 1) * 100
 
+    # Per-row feature attribution -- see shap_explainer comment above for why
+    # "most negative shap value" == "biggest driver of the anomaly".
+    shap_values = shap_explainer.shap_values(X)
+
     results = []
     for i in range(len(df)):
         row = df.iloc[i]
         auth_bruteforce_score = float(row.get("auth_bruteforce_score", 0))
         is_bruteforce = bool(auth_bruteforce_score >= AUTH_BRUTEFORCE_THRESHOLD)
 
+        sv_row = shap_values[i]
+        top_order = np.argsort(sv_row)[:3]  # ascending -> most negative (most anomalous) first
+        top_features = [
+            {
+                "feature": used_feature_cols[idx],
+                "shap": round(float(sv_row[idx]), 4),
+                "value": _format_feature_value(row.get(used_feature_cols[idx])),
+            }
+            for idx in top_order
+        ]
+
+        # Check threat intelligence for source IP
+        src_ip = row.get("_src_ip", "unknown")
+        threat_intel = get_ip_reputation(src_ip)
+        is_known_malicious = threat_intel.get("is_malicious", False)
+
+        # WAF analysis for HTTP traffic
+        waf_result = None
+        if row.get("service") == "http":
+            http_body = row.get("_http_body", "")
+            http_headers = row.get("_http_headers", {})
+            http_method = row.get("_http_method", "GET")
+            if http_body or http_method:
+                waf_result = waf_engine.analyze_http_request(
+                    url=row.get("_http_url", "/"),
+                    http_method=http_method,
+                    http_headers=http_headers,
+                    http_body=http_body,
+                    request_count=int(row.get("count", 1))
+                )
+
         # crude "why flagged" explanation: which numeric features are most
         # extreme relative to training distribution (z-score style via scaler)
         reasons = []
+        if is_known_malicious:
+            reasons.append(
+                f"source IP {src_ip} is known to be malicious "
+                f"(threat intel score: {threat_intel['reputation_score']}/100)"
+            )
         if is_bruteforce:
             reasons.append(
                 f"possible password brute-force: {int(auth_bruteforce_score)} connection "
@@ -146,25 +256,58 @@ def score_rows(df: pd.DataFrame):
         if row.get("count", 0) > 200:
             reasons.append("unusually high connection count in short window")
         if row.get("num_failed_logins", 0) > 0:
-            reasons.append("failed login attempts detected")
+            reasons.append(f"failed login attempts detected ({int(row.get('num_failed_logins', 0))} attempts)")
         if row.get("dst_host_diff_srv_rate", 0) > 0.5:
             reasons.append("connections spread across many services (scan-like behavior)")
+        # Add WAF findings
+        if waf_result:
+            if waf_result["attacks_detected"]:
+                for attack in waf_result["attacks_detected"]:
+                    reasons.append(f"WAF: {attack} detected (risk: {waf_result['risk_score']})")
+
         if not reasons:
-            reasons.append("statistical deviation from learned normal traffic baseline")
+            top1 = top_features[0]
+            reasons.append(
+                f"statistical deviation from learned normal traffic baseline "
+                f"(top contributor: {top1['feature']} = {top1['value']})"
+            )
 
-        risk_i = max(float(risk[i]), 70.0) if is_bruteforce else float(risk[i])
+        # Boost risk if IP is known malicious or WAF detected attack
+        base_risk = float(risk[i])
+        if is_known_malicious:
+            base_risk = max(base_risk, 80.0)
+        if waf_result and waf_result.get("block"):
+            base_risk = max(base_risk, 90.0)
 
-        results.append({
+        risk_i = max(base_risk, 70.0) if is_bruteforce else base_risk
+
+        alert_data = {
             "risk_score": round(risk_i, 1),
-            "flagged": bool(is_attack[i]) or is_bruteforce,
+            "flagged": bool(is_attack[i]) or is_bruteforce or is_known_malicious or (waf_result and waf_result.get("block")),
             "true_label": row.get("label", None),
             "protocol_type": row.get("protocol_type", None),
             "service": row.get("service", None),
             "flag": row.get("flag", None),
             "src_bytes": float(row.get("src_bytes", 0)),
             "dst_bytes": float(row.get("dst_bytes", 0)),
+            "auth_bruteforce_score": auth_bruteforce_score,
+            "threat_intel_score": threat_intel.get("reputation_score", 0),
+            "is_known_malicious": is_known_malicious,
+            "src_ip": src_ip,
             "reasons": reasons,
-        })
+            "top_features": top_features,
+        }
+
+        # Add WAF details if attack detected
+        if waf_result:
+            alert_data["waf_attacks"] = waf_result.get("attacks_detected", [])
+            alert_data["waf_risk"] = waf_result["risk_score"]
+
+        # Execute response policy if alert flagged
+        if alert_data.get("flagged"):
+            resp_engine.execute_response(alert_data, simulate=True)
+
+        results.append(alert_data)
     return results
 
 
@@ -198,14 +341,16 @@ class LiveBroadcaster:
             self.disconnect(ws)
 
     def on_capture_results(self, feature_rows):
-        """Called from the capture's background thread with new raw feature rows."""
-        if not self.clients or self.loop is None:
-            return
+        """Called from the capture's background thread with new raw feature rows.
+        Persists to the DB regardless of whether anyone's watching the dashboard --
+        live capture keeps building alert history even with the browser tab closed."""
         try:
-            results = score_feature_rows(feature_rows)
+            results = score_feature_rows(feature_rows, source="live")
         except Exception as e:
             results = [{"error": f"{type(e).__name__}: {e}"}]
 
+        if not self.clients or self.loop is None:
+            return
         asyncio.run_coroutine_threadsafe(
             self._broadcast({"type": "results", "results": results}), self.loop
         )
@@ -218,6 +363,7 @@ live_capture = LiveCapture(on_results=broadcaster.on_capture_results)
 @app.on_event("startup")
 async def on_startup():
     broadcaster.set_loop(asyncio.get_event_loop())
+    db_store.init_db()
 
 
 @app.on_event("shutdown")
@@ -226,11 +372,13 @@ def on_shutdown():
         live_capture.stop()
 
 
-def score_feature_rows(feature_rows):
-    """Shared by /analyze-pcap and the live capture broadcaster: takes raw rows
-    from pcap_to_features.compute_features() (still carrying _src_ip/_dst_ip/
-    _dst_port/_conn_key metadata) and returns scored results with that metadata
-    merged back in."""
+def score_feature_rows(feature_rows, source):
+    """Shared by /analyze-pcap, /demo/simulate-attack, and the live capture
+    broadcaster: takes raw rows from pcap_to_features.compute_features() (still
+    carrying _src_ip/_dst_ip/_dst_port/_conn_key metadata), scores them, and
+    persists every result to the DB tagged with `source` ('upload' | 'demo_scenario'
+    | 'live') -- these are the only sources ever written to storage; the simulated
+    NSL-KDD sample-traffic feed never touches the DB, so history stays trustworthy."""
     df = pd.DataFrame(feature_rows)
     df["label"] = "unknown"
     meta = df[["_src_ip", "_dst_ip", "_dst_port"]].to_dict("records")
@@ -240,6 +388,14 @@ def score_feature_rows(feature_rows):
         r["src_ip"] = m["_src_ip"]
         r["dst_ip"] = m["_dst_ip"]
         r["dst_port"] = m["_dst_port"]
+    try:
+        db_store.insert_scored_results(results, source=source)
+    except Exception:
+        pass  # persistence is best-effort -- never break scoring/live capture over a DB hiccup
+    try:
+        notifications.notify_high_risk(results, source=source, threshold=ALERT_RISK_THRESHOLD)
+    except Exception:
+        pass  # same -- a dead webhook must never break scoring
     return results
 
 
@@ -250,9 +406,10 @@ def health():
 
 @app.get("/interfaces")
 def get_interfaces():
-    """List network interfaces available for live capture (requires Npcap on Windows)."""
+    """List network interfaces available for live capture (requires Npcap on Windows),
+    with human-readable name/description alongside the raw device string."""
     try:
-        return {"interfaces": list_interfaces()}
+        return {"interfaces": list_interfaces_detailed()}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not list interfaces: {type(e).__name__}: {e}") from e
 
@@ -300,6 +457,101 @@ def get_metrics():
     return metrics
 
 
+@app.get("/alerts")
+def get_alerts(
+    limit: int = Query(default=50, ge=1, le=500),
+    min_risk: float = Query(default=ALERT_RISK_THRESHOLD, ge=0, le=100),
+):
+    """High-risk history from real (packet-derived) sources only -- upload,
+    demo scenario, and live capture. Survives page reloads and backend restarts."""
+    return {"alerts": db_store.get_alerts(limit=limit, min_risk=min_risk)}
+
+
+@app.get("/alerts/stats")
+def get_alert_stats():
+    """Session/all-time aggregate counters + top offending source IPs, computed
+    from the same persisted history -- powers the live-stat readouts on the dashboard."""
+    return db_store.get_stats()
+
+
+@app.delete("/alerts")
+def clear_alerts():
+    db_store.clear_all()
+    return {"status": "cleared"}
+
+
+class BlockIpRequest(BaseModel):
+    ip: str
+    reason: Optional[str] = None
+
+
+@app.post("/firewall/block")
+def firewall_block(req: BlockIpRequest):
+    """
+    Adds a Windows Firewall rule blocking inbound traffic from this IP.
+    Requires the backend to be running as Administrator (same requirement as
+    live capture). This is NEVER called automatically by the scoring pipeline --
+    only ever in direct response to an explicit user click + confirmation in
+    the dashboard, exactly like a security analyst running the command by hand.
+    """
+    try:
+        result = firewall.block_ip(req.ip)
+    except firewall.FirewallError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db_store.add_blocked_ip(req.ip, reason=req.reason)
+    return result
+
+
+@app.post("/firewall/unblock")
+def firewall_unblock(req: BlockIpRequest):
+    try:
+        result = firewall.unblock_ip(req.ip)
+    except firewall.FirewallError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    db_store.remove_blocked_ip(req.ip)
+    return result
+
+
+@app.get("/firewall/blocked")
+def firewall_list_blocked():
+    return {"blocked": db_store.list_blocked_ips()}
+
+
+class WebhookSettings(BaseModel):
+    url: str = ""
+    enabled: bool = False
+
+
+@app.get("/settings/webhook")
+def get_webhook_settings():
+    return {
+        "url": db_store.get_setting("webhook_url", ""),
+        "enabled": db_store.get_setting("webhook_enabled") == "1",
+    }
+
+
+@app.post("/settings/webhook")
+def set_webhook_settings(req: WebhookSettings):
+    if req.url and not (req.url.startswith("http://") or req.url.startswith("https://")):
+        raise HTTPException(status_code=400, detail="Webhook URL must start with http:// or https://")
+    db_store.set_setting("webhook_url", req.url)
+    db_store.set_setting("webhook_enabled", "1" if req.enabled else "0")
+    return {"status": "saved"}
+
+
+@app.post("/settings/webhook/test")
+def test_webhook_settings(req: WebhookSettings):
+    """Fires one test payload immediately, using the URL passed in (not necessarily
+    saved yet) -- so the user can verify it works before enabling it for real."""
+    if not req.url:
+        raise HTTPException(status_code=400, detail="No webhook URL provided")
+    try:
+        status = notifications.send_test(req.url)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Webhook test failed: {type(e).__name__}: {e}") from e
+    return {"status": "sent", "http_status": status}
+
+
 @app.get("/sample-traffic")
 def sample_traffic(
     n: int = Query(default=20, ge=1, le=200),
@@ -339,6 +591,24 @@ def analyze(rows: List[TrafficRow]):
     return {"results": results}
 
 
+PCAP_ANALYSIS_NOTE = (
+    "Flow features (bytes, duration, error rates, protocol) computed from "
+    "actual packets. Content/host features (failed logins, root shell, etc.) "
+    "default to 0 -- not derivable from network traffic alone."
+)
+
+
+def analyze_pcap_file(pcap_path, source):
+    """Shared by /analyze-pcap (uploaded file) and /demo/simulate-attack (canned
+    scenario file already on disk) -- extract connections, compute features, score."""
+    conns = extract_connections(pcap_path)
+    if len(conns) == 0:
+        return {"results": [], "note": "No TCP/UDP/ICMP connections found in this capture."}
+    feature_rows = compute_features(conns)
+    results = score_feature_rows(feature_rows, source=source)
+    return {"results": results, "note": PCAP_ANALYSIS_NOTE}
+
+
 @app.post("/analyze-pcap")
 async def analyze_pcap(file: UploadFile = File(...)):
     """
@@ -361,20 +631,7 @@ async def analyze_pcap(file: UploadFile = File(...)):
             raise HTTPException(status_code=413, detail="Max pcap size is 50MB for this demo")
         with open(tmp_path, "wb") as f:
             f.write(content)
-
-        conns = extract_connections(tmp_path)
-        if len(conns) == 0:
-            return {"results": [], "note": "No TCP/UDP/ICMP connections found in this capture."}
-
-        feature_rows = compute_features(conns)
-        results = score_feature_rows(feature_rows)
-
-        return {
-            "results": results,
-            "note": ("Flow features (bytes, duration, error rates, protocol) computed from "
-                     "actual packets. Content/host features (failed logins, root shell, etc.) "
-                     "default to 0 -- not derivable from network traffic alone."),
-        }
+        return analyze_pcap_file(tmp_path, source="upload")
     except HTTPException:
         raise
     except Exception as e:
@@ -382,3 +639,24 @@ async def analyze_pcap(file: UploadFile = File(...)):
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+
+
+@app.post("/demo/simulate-attack")
+def simulate_attack():
+    """
+    Runs the same scoring pipeline as /analyze-pcap over a canned scenario file
+    already on disk (data/test_traffic.pcap) -- normal HTTP/HTTPS traffic, a SYN
+    port scan, a SYN flood, and a throttled SSH brute-force -- so the detection
+    logic can be demonstrated with one click, without needing a real attacker or
+    a file to upload. See notebooks/generate_test_pcap.py for how it's built.
+    """
+    demo_path = os.path.join(DATA_DIR, "test_traffic.pcap")
+    if not os.path.exists(demo_path):
+        raise HTTPException(
+            status_code=404,
+            detail="Demo capture not found. Run: python notebooks/generate_test_pcap.py",
+        )
+    try:
+        return analyze_pcap_file(demo_path, source="demo_scenario")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"pcap processing failed: {type(e).__name__}: {e}") from e

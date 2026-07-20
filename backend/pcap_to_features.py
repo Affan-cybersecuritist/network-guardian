@@ -15,14 +15,14 @@ NSL-KDD's 41 features fall into two groups:
   2. "Content/host" features (num_failed_logins, root_shell, num_compromised,
      hot, num_shells, num_file_creations, num_access_files, num_outbound_cmds,
      is_host_login, is_guest_login, su_attempted, num_root, urgent, land,
-     wrong_fragment) -- these require deep packet PAYLOAD inspection and
-     host-level audit logs (e.g. did this session actually get root shell
-     access). No network-flow tool can derive these from traffic metadata
-     alone -- the original 1998 DARPA/KDD dataset builders had a fully
-     instrumented lab environment to capture these. This script sets them
-     to 0 (their statistical mode/most-common value), which is disclosed
-     here and in the API response so nobody mistakes this for something
-     it isn't.
+     wrong_fragment) -- these normally require deep packet PAYLOAD inspection and
+     host-level audit logs. The original 1998 DARPA/KDD dataset builders had a
+     fully instrumented lab environment to capture these. We now use lightweight
+     payload inspection (grep-level patterns) to recover num_failed_logins for
+     plaintext FTP (port 21) connections by detecting RFC 959 response codes
+     (530 Not logged in, etc.). Most other content/host features remain zeroed
+     as they require access logs or elevated host instrumentation unavailable
+     from packet captures alone.
 
 Connections are grouped by 5-tuple (src_ip, dst_ip, src_port, dst_port, proto)
 and aggregate "traffic" features (count, srv_count, error rates, etc.) are
@@ -42,7 +42,7 @@ column so it can actually use this signal -- see notebooks/data_prep.py.
 import sys
 import os
 from collections import defaultdict
-from scapy.all import rdpcap, IP, TCP, UDP, ICMP
+from scapy.all import rdpcap, IP, TCP, UDP, ICMP, Raw
 
 TIME_WINDOW = 2.0  # seconds, per original KDD "same host" window
 
@@ -56,6 +56,110 @@ TIME_WINDOW = 2.0  # seconds, per original KDD "same host" window
 # survives the attacker rotating source ports.
 AUTH_PORTS = {21: "ftp", 22: "ssh", 23: "telnet"}
 AUTH_WINDOW = 60.0  # seconds
+
+# FTP auth failure indicators (RFC 959 response codes)
+FTP_AUTH_FAIL_PATTERNS = [
+    b"530",  # 530 Not logged in
+    b"550",  # 550 Permission denied
+    b"421",  # 421 Service not available (temporary failure)
+    b"Login incorrect",
+    b"Invalid user",
+]
+
+
+def extract_ftp_failed_logins(conn_packets):
+    """
+    Lightweight payload inspection for FTP connections: count server responses
+    with 530 (Not logged in) or similar auth-failure codes. Returns count.
+    Intended for plaintext FTP on port 21 only.
+    """
+    if not conn_packets:
+        return 0
+
+    failed_count = 0
+    for pkt in conn_packets:
+        if Raw not in pkt:
+            continue
+        payload = bytes(pkt[Raw].load)
+        for pattern in FTP_AUTH_FAIL_PATTERNS:
+            if pattern in payload:
+                failed_count += 1
+                break  # count each packet only once
+    return failed_count
+
+
+def extract_http_auth_failures(conn_packets):
+    """
+    Detect HTTP authentication failures (401/403 responses).
+    Returns count of failed auth attempts.
+    """
+    if not conn_packets:
+        return 0
+
+    failure_count = 0
+    for pkt in conn_packets:
+        if Raw not in pkt:
+            continue
+        payload = bytes(pkt[Raw].load)
+        # HTTP 401 Unauthorized or 403 Forbidden
+        if b"401" in payload or b"403" in payload:
+            failure_count += 1
+    return failure_count
+
+
+def extract_dns_queries(conn_packets):
+    """
+    Extract DNS queries for exfiltration and suspicious domain detection.
+    Returns list of domains queried.
+    """
+    if not conn_packets:
+        return []
+
+    domains = []
+    for pkt in conn_packets:
+        if Raw not in pkt:
+            continue
+        payload = bytes(pkt[Raw].load)
+        # Simple DNS query detection (domain names in payload)
+        # Real DNS parsing would use dnspython library
+        try:
+            # Extract printable strings that look like domains
+            text = payload.decode('utf-8', errors='ignore')
+            words = text.split()
+            for word in words:
+                if '.' in word and len(word) > 4 and len(word) < 255:
+                    # Rough domain pattern
+                    if all(c.isalnum() or c in '.-' for c in word):
+                        domains.append(word)
+        except:
+            pass
+    return domains
+
+
+def detect_suspicious_dns(domains):
+    """
+    Detect suspicious DNS query patterns.
+    Returns risk score and reason.
+    """
+    if not domains:
+        return 0, None
+
+    # High query rate = possible DNS exfiltration
+    if len(domains) > 50:
+        return 30, "Unusually high DNS query rate (possible exfiltration)"
+
+    # Known DGA indicators (simplified)
+    dga_patterns = [
+        'rand', 'temp', 'xyz', 'tk', 'ml', 'ga',  # common DGA TLDs
+        'generated', 'random', 'malware'
+    ]
+
+    for domain in domains:
+        for pattern in dga_patterns:
+            if pattern in domain.lower():
+                return 40, f"Suspected DGA domain: {domain}"
+
+    return 0, None
 
 
 def extract_connections(pcap_path):
@@ -197,6 +301,23 @@ def compute_features(conns):
         same_srv_rate = srv_count / max(count, 1)
         diff_srv_rate = 1 - same_srv_rate
 
+        # Lightweight payload inspection for auth failures
+        ftp_failed_logins = 0
+        http_failed_logins = 0
+        dns_queries = []
+
+        if dport == 21 and proto == "tcp":  # FTP uses port 21, TCP only
+            ftp_failed_logins = extract_ftp_failed_logins(c["packets"])
+
+        if dport == 80 and proto == "tcp":  # HTTP uses port 80, TCP only
+            http_failed_logins = extract_http_auth_failures(c["packets"])
+
+        if dport == 53 and proto == "udp":  # DNS uses port 53, UDP
+            dns_queries = extract_dns_queries(c["packets"])
+
+        # Total failed logins (FTP + HTTP)
+        total_failed_logins = ftp_failed_logins + http_failed_logins
+
         row = {
             "duration": round(c["end_time"] - c["start_time"], 4),
             "protocol_type": proto,
@@ -220,8 +341,8 @@ def compute_features(conns):
             "dst_host_srv_serror_rate": round(serror_rate, 3),
             "dst_host_rerror_rate": round(rerror_rate, 3),
             "dst_host_srv_rerror_rate": round(rerror_rate, 3),
-            # --- content/host features: NOT derivable from flow data alone, see module docstring ---
-            "num_failed_logins": 0, "root_shell": 0, "num_compromised": 0, "hot": 0,
+            # --- content/host features: partially recovered via lightweight payload inspection ---
+            "num_failed_logins": total_failed_logins, "root_shell": 0, "num_compromised": 0, "hot": 0,
             "num_shells": 0, "num_file_creations": 0, "num_access_files": 0,
             "num_outbound_cmds": 0, "is_host_login": 0, "is_guest_login": 0,
             "su_attempted": 0, "num_root": 0, "urgent": 0, "land": 1 if src_ip == dst_ip else 0,
@@ -231,6 +352,9 @@ def compute_features(conns):
             "auth_bruteforce_score": float(auth_scores.get(key, 0)),
             # metadata (not fed to model, useful for display)
             "_src_ip": src_ip, "_dst_ip": dst_ip, "_dst_port": dport, "_conn_key": key,
+            "_http_failures": http_failed_logins,
+            "_dns_queries": len(dns_queries),
+            "_dns_domains": dns_queries[:5] if dns_queries else [],  # Top 5 domains
         }
         rows.append(row)
     return rows
@@ -245,8 +369,14 @@ if __name__ == "__main__":
     print(f"Computed feature rows for {len(rows)} connections\n")
 
     for r in rows:
-        bruteforce_marker = f" <-- possible brute-force ({r['auth_bruteforce_score']:.0f} attempts/60s)" if r["auth_bruteforce_score"] >= 5 else ""
-        flagged_marker = " <-- suspicious pattern" if r["flag"] in ("S0", "REJ") or r["count"] > 20 else bruteforce_marker
+        markers = []
+        if r["auth_bruteforce_score"] >= 5:
+            markers.append(f"brute-force ({r['auth_bruteforce_score']:.0f} attempts/60s)")
+        if r["num_failed_logins"] > 0:
+            markers.append(f"FTP auth-fails ({r['num_failed_logins']})")
+        if r["flag"] in ("S0", "REJ") or r["count"] > 20:
+            markers.append("suspicious pattern")
+        flagged_marker = f" <-- {', '.join(markers)}" if markers else ""
         print(f"{r['_src_ip']:>15} -> {r['_dst_ip']:<15}:{r['_dst_port']:<5} "
               f"proto={r['protocol_type']:<4} flag={r['flag']:<3} "
               f"count={r['count']:<4} srv_count={r['srv_count']:<4} "

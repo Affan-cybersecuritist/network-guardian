@@ -5,120 +5,317 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Network Guardian — AI Intrusion Detection</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="ds-organic.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-<div class="scanline-overlay"></div>
+<div id="boot-overlay">
+  <div class="boot-mark">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></svg>
+  </div>
+  <div style="font-family:var(--font-heading);font-size:22px">Network Guardian</div>
+  <div class="boot-track"><div class="boot-fill" id="boot-fill"></div></div>
+  <div class="boot-label" id="boot-label">Loading model artifacts…</div>
+</div>
 
-<header class="topbar">
-  <div class="brand">
+<div class="page">
+  <div class="blob blob-1"></div>
+  <div class="blob blob-2"></div>
+
+  <header class="app-header">
     <div class="brand-mark">
-      <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
-        <path d="M14 2L4 6.5V13.5C4 19.8 8.4 25.5 14 27C19.6 25.5 24 19.8 24 13.5V6.5L14 2Z" stroke="var(--safe-teal)" stroke-width="1.6"/>
-        <path d="M9 14L12.5 17.5L19 10.5" stroke="var(--safe-teal)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
-      </svg>
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"></path></svg>
     </div>
-    <div>
-      <h1>Network Guardian</h1>
-      <p class="eyebrow">Behavior-based intrusion detection · not signature matching</p>
+    <div class="brand-title">Network Guardian</div>
+    <span class="tag tag-accent-2">NTRO · SIH</span>
+    <div class="spacer"></div>
+    <div class="status-live">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">Connecting…</span>
     </div>
-  </div>
-  <div class="status-pill" id="status-pill">
-    <span class="dot"></span>
-    <span id="status-text">Connecting…</span>
-  </div>
-</header>
+    <div class="alert-bell-wrap">
+      <button class="btn btn-icon alert-bell" id="alert-bell-btn" aria-label="High-risk alerts" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"></path><path d="M13.73 21a2 2 0 0 1-3.46 0"></path></svg>
+        <span class="alert-badge" id="alert-badge" style="display:none">0</span>
+      </button>
+      <div class="alert-panel" id="alert-panel" style="display:none">
+        <div class="alert-panel-head">
+          <span>High-risk alerts</span>
+          <span class="text-muted" id="alert-panel-count">0</span>
+        </div>
+        <div class="alert-panel-list" id="alert-panel-list">
+          <div class="alert-empty">No high-risk anomalies yet — this fills in from live capture and pcap analysis (score ≥ 70), not the simulated demo feed.</div>
+        </div>
+      </div>
+    </div>
+    <div class="alert-bell-wrap">
+      <button class="btn btn-icon alert-bell" id="blocked-bell-btn" aria-label="Blocked IPs" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+        <span class="alert-badge" id="blocked-badge" style="display:none">0</span>
+      </button>
+      <div class="alert-panel" id="blocked-panel" style="display:none">
+        <div class="alert-panel-head">
+          <span>Blocked IPs</span>
+          <span class="text-muted" id="blocked-panel-count">0</span>
+        </div>
+        <div class="alert-panel-list" id="blocked-panel-list">
+          <div class="alert-empty">Nothing blocked yet. Block an IP from an alert's detail view.</div>
+        </div>
+      </div>
+    </div>
+    <div class="alert-bell-wrap">
+      <button class="btn btn-icon alert-bell" id="settings-bell-btn" aria-label="Notification settings" type="button">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+      </button>
+      <div class="alert-panel settings-panel" id="settings-panel" style="display:none">
+        <div class="alert-panel-head"><span>Notification settings</span></div>
+        <div class="settings-body">
+          <label class="settings-row">
+            <input type="checkbox" id="desktop-notif-toggle" />
+            <span>Desktop notifications for high-risk alerts</span>
+          </label>
+          <div class="hr"></div>
+          <label class="field">
+            <span>Webhook URL <span class="text-muted">(Slack / Discord / custom — optional)</span></span>
+            <input type="text" class="input" id="webhook-url-input" placeholder="https://hooks.slack.com/services/…" />
+          </label>
+          <label class="settings-row" style="margin-top:8px">
+            <input type="checkbox" id="webhook-enabled-toggle" />
+            <span>Send webhook on high-risk detections</span>
+          </label>
+          <div class="settings-actions">
+            <button class="btn btn-secondary" id="webhook-test-btn" type="button">Send test</button>
+            <button class="btn btn-primary" id="webhook-save-btn" type="button">Save</button>
+          </div>
+          <div class="modal-block-status" id="webhook-status"></div>
+        </div>
+      </div>
+    </div>
+  </header>
 
-<section class="stat-strip" id="stat-strip">
-  <div class="stat-card">
-    <span class="stat-label">ROC-AUC</span>
-    <span class="stat-value" id="stat-auc">—</span>
-  </div>
-  <div class="stat-card">
-    <span class="stat-label">Attack Precision</span>
-    <span class="stat-value" id="stat-precision">—</span>
-  </div>
-  <div class="stat-card highlight">
-    <span class="stat-label">Unseen-Attack Detection</span>
-    <span class="stat-value" id="stat-novel">—</span>
-  </div>
-  <div class="stat-card">
-    <span class="stat-label">Connections Analyzed</span>
-    <span class="stat-value" id="stat-count">0</span>
-  </div>
-</section>
+  <section class="section section-hero">
+    <div class="section-inner" style="animation: rise .7s .05s both">
+      <span class="tag tag-accent" style="margin-bottom:16px;display:inline-flex">Anomaly-based intrusion detection</span>
+      <h1 style="max-width:760px;margin:10px 0 32px;text-wrap:pretty">Catches attacks it has never seen before.</h1>
+      <div class="metric-row">
+        <div class="flip-card" data-metric="auc">
+          <div class="flip-inner">
+            <div class="flip-face">
+              <div class="metric-kicker">ROC-AUC</div>
+              <div class="metric-value" id="metric-auc">0.000</div>
+              <div class="metric-sub text-muted">NSL-KDD held-out test set</div>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="metric-back-kicker">What it means</div>
+              <div class="metric-back-text">How well the model separates attacks from normal traffic across every threshold.</div>
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" data-metric="prec">
+          <div class="flip-inner">
+            <div class="flip-face">
+              <div class="metric-kicker">Precision</div>
+              <div class="metric-value"><span id="metric-prec">0.0</span>%</div>
+              <div class="metric-sub text-muted">Flags are almost always real</div>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="metric-back-kicker">What it means</div>
+              <div class="metric-back-text" id="metric-prec-back">Most flags are real attacks — very few false alarms to chase.</div>
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" data-metric="rec">
+          <div class="flip-inner">
+            <div class="flip-face">
+              <div class="metric-kicker">Recall</div>
+              <div class="metric-value"><span id="metric-rec">0.0</span>%</div>
+              <div class="metric-sub text-muted">Trained on normal traffic only</div>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="metric-back-kicker">What it means</div>
+              <div class="metric-back-text">Trained only on normal traffic, so it misses some attacks — a tradeoff for zero-day-first detection.</div>
+            </div>
+          </div>
+        </div>
+        <div class="flip-card metric-headline" data-metric="unseen">
+          <div class="flip-inner">
+            <div class="flip-face">
+              <div class="metric-kicker">Unseen attack types</div>
+              <div class="metric-value"><span id="metric-unseen">0.0</span>%</div>
+              <div class="metric-sub">Detected with zero prior signatures</div>
+            </div>
+            <div class="flip-face flip-back">
+              <div class="metric-back-kicker">The headline result</div>
+              <div class="metric-back-text">Tested against attack families held out entirely from training — proof it generalizes past known signatures.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
 
-<section class="pulse-section">
-  <div class="pulse-header">
-    <div>
-      <span class="section-label">00 / Analyze Real Traffic</span>
-      <p class="section-sub">Upload a .pcap/.pcapng capture — features are computed from the actual packets, not sample data.</p>
+  <section class="section" style="animation: rise .7s .15s both">
+    <div class="section-inner">
+      <div class="section-head">
+        <div class="step-badge">1</div>
+        <h2>Live packet capture</h2>
+        <div class="spacer"></div>
+        <select class="iface-select" id="iface-select"></select>
+        <button class="btn btn-primary" id="capture-toggle-btn">Start live capture</button>
+      </div>
+
+      <div class="capture-status" id="capture-status">Not capturing.</div>
+      <div class="live-stat-row" id="live-stat-row">
+        <div class="live-stat"><span class="live-stat-value" id="stat-pps">0.0</span><span class="live-stat-label">packets/sec</span></div>
+        <div class="live-stat"><span class="live-stat-value" id="stat-scored">0</span><span class="live-stat-label">connections scored</span></div>
+        <div class="live-stat"><span class="live-stat-value" id="stat-flagged">0</span><span class="live-stat-label">flagged anomalous</span></div>
+        <div class="live-stat is-accent"><span class="live-stat-value" id="stat-highrisk">0</span><span class="live-stat-label">high-risk alerts</span></div>
+      </div>
+
+      <div class="live-grid">
+        <div class="live-feed-card">
+          <div class="live-feed-scroll">
+            <table class="live-table">
+              <thead>
+                <tr>
+                  <th>Time</th><th>Source</th><th>Service</th><th class="num">Bytes</th><th class="num">Score</th><th>Verdict</th>
+                </tr>
+              </thead>
+              <tbody id="live-feed-tbody">
+                <tr class="live-empty-row" id="live-empty-row"><td colspan="6">No live connections yet — start a capture above.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="detail-panel">
+          <div class="detail-kicker">Why was this flagged?</div>
+          <div id="detail-content">
+            <div class="detail-placeholder">Tap a row in the live feed to see the model's reasons — rule hits and deviations from the learned baseline, in plain words.</div>
+          </div>
+        </div>
+      </div>
+      <div class="section-caption">Sniffing via scapy AsyncSniffer · rolling 65-second window · re-scored every 3 s with the same pipeline as pcap uploads. Requires Npcap + Administrator on Windows.</div>
     </div>
-    <div class="controls">
-      <input type="file" id="pcap-input" accept=".pcap,.pcapng" style="display:none" />
-      <button id="upload-btn" class="btn-primary">Upload Capture</button>
+  </section>
+
+  <section class="section" style="animation: rise .7s .25s both">
+    <div class="section-inner">
+      <div class="section-head">
+        <div class="step-badge">2</div>
+        <h2>Live traffic pulse</h2>
+        <span class="tag tag-neutral">Simulated · sampled from held-out NSL-KDD</span>
+      </div>
+      <div class="pulse-card">
+        <canvas id="pulse-canvas" width="2280" height="340"></canvas>
+      </div>
+      <div class="section-caption" id="pulse-stat-line">Terracotta spikes are connections the Isolation Forest scored above the anomaly threshold; sage bars are normal. This feed samples test data — the capture and upload paths above/below run on real packets.</div>
+    </div>
+  </section>
+
+  <section class="section" style="animation: rise .7s .35s both">
+    <div class="section-inner analyze-grid">
+      <div>
+        <div class="section-head">
+          <div class="step-badge">3</div>
+          <h2>Analyze real traffic</h2>
+        </div>
+        <div class="dropzone tilt-card" id="dropzone">
+          <div class="dropzone-title">Drop a .pcap / .pcapng here</div>
+          <div class="dropzone-sub">Captured with tcpdump or Wireshark — scored by the exact same feature pipeline. Or run a canned attack scenario instantly.</div>
+          <div class="dropzone-actions">
+            <button class="btn btn-primary" id="upload-btn" type="button">Upload capture</button>
+            <button class="btn btn-secondary" id="simulate-attack-btn" type="button">Simulate an attack</button>
+          </div>
+          <input type="file" id="pcap-input" accept=".pcap,.pcapng" style="display:none" />
+        </div>
+      </div>
+      <div>
+        <div id="analyze-result">
+          <div class="analyze-placeholder">Flow features (protocol, bytes, duration, error rates) are computed for real from packets. Content and host features need payload inspection — they default to 0, and the API says so.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" style="animation: rise .7s .45s both">
+    <div class="section-inner">
+      <div class="section-head">
+        <div class="step-badge">4</div>
+        <h2>Catching throttled brute-force</h2>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:20px">
+        <div class="flip-card" data-metric="evasion">
+          <div class="flip-inner">
+            <div class="flip-face">
+              <div style="font-family:var(--font-heading);font-size:17px;margin-bottom:8px">The evasion</div>
+              <div style="font-size:13.5px;line-height:1.6" class="text-muted">Password tools throttle to ~1 attempt every 2 s — invisible to the classic 2-second count window.</div>
+            </div>
+            <div class="flip-face flip-back">
+              <div style="font-family:var(--font-heading);font-size:17px;margin-bottom:8px;color:var(--color-accent-700)">Example</div>
+              <div style="font-size:13.5px;line-height:1.6" class="text-muted">20 SSH login attempts, one every ~2.2s — far under any per-2s connection-count alarm.</div>
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" data-metric="feature">
+          <div class="flip-inner">
+            <div class="flip-face">
+              <div style="font-family:var(--font-heading);font-size:17px;margin-bottom:8px">The feature</div>
+              <div style="font-size:13.5px;line-height:1.6" class="text-muted"><span style="font-family:ui-monospace,monospace;color:var(--color-accent-700)">auth_bruteforce_score</span> — attempts per source hitting ftp/21, ssh/22, telnet/23 in a rolling 60-second window.</div>
+            </div>
+            <div class="flip-face flip-back">
+              <div style="font-family:var(--font-heading);font-size:17px;margin-bottom:8px;color:var(--color-accent-700)">Retrained on it</div>
+              <div style="font-size:13.5px;line-height:1.6" class="text-muted">The Isolation Forest was retrained with this feature so throttled brute-force stands out statistically too.</div>
+            </div>
+          </div>
+        </div>
+        <div class="flip-card" data-metric="rule" style="background:var(--color-accent-2-200)">
+          <div class="flip-inner">
+            <div class="flip-face">
+              <div style="font-family:var(--font-heading);font-size:17px;margin-bottom:8px;color:var(--color-accent-2-900)">The rule on top</div>
+              <div style="font-size:13.5px;line-height:1.6;color:var(--color-accent-2-800)">score ≥ 15 force-flags the connection regardless of the model's verdict — rules layered on ML, like real security tools.</div>
+            </div>
+            <div class="flip-face flip-back">
+              <div style="font-family:var(--font-heading);font-size:17px;margin-bottom:8px;color:var(--color-accent-2-900)">Why layer rules</div>
+              <div style="font-size:13.5px;line-height:1.6;color:var(--color-accent-2-800)">ML catches statistical anomalies; a deterministic rule guarantees this well-understood attack is never missed.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="live-readout" id="bruteforce-live-stats">
+        Live so far this session: <strong id="bf-observed">0</strong> auth-port (ftp/ssh/telnet) connections observed ·
+        highest attempt count seen: <strong id="bf-max">0</strong> in a 60s window ·
+        <strong id="bf-triggered">0</strong> force-flagged by the ≥15 rule.
+      </div>
+    </div>
+  </section>
+
+  <section class="section" style="padding-bottom:56px;animation: rise .7s .55s both">
+    <div class="section-inner">
+      <div class="section-head">
+        <div class="step-badge">5</div>
+        <h2>Pipeline</h2>
+      </div>
+      <div class="pipeline-row" id="pipeline-row"></div>
+    </div>
+  </section>
+
+  <footer class="app-footer">
+    <div class="app-footer-title">The model never saw the attack. It flagged it anyway.</div>
+    <div class="spacer"></div>
+    <div class="app-footer-meta">NSL-KDD · Isolation Forest · FastAPI · scapy</div>
+  </footer>
+</div>
+
+<div class="dialog-backdrop" id="alert-modal-backdrop" style="display:none">
+  <div class="dialog">
+    <div class="dialog-title" id="alert-modal-title">—</div>
+    <div class="dialog-body" id="alert-modal-body"></div>
+    <div class="dialog-actions">
+      <button class="btn btn-secondary" id="alert-modal-close" type="button">Close</button>
     </div>
   </div>
-  <div id="upload-status" class="upload-status"></div>
-</section>
-
-<section class="pulse-section">
-  <div class="pulse-header">
-    <div>
-      <span class="section-label">01 / Live Packet Capture</span>
-      <p class="section-sub">Sniffs a real network interface continuously and scores connections as they happen. Requires Npcap + Administrator on Windows.</p>
-    </div>
-    <div class="controls">
-      <label class="ratio-control">
-        Interface
-        <select id="iface-select"></select>
-      </label>
-      <button id="live-toggle-btn" class="btn-primary">Start Live Capture</button>
-    </div>
-  </div>
-  <div id="live-status" class="upload-status">Not connected.</div>
-</section>
-
-<section class="pulse-section">
-  <div class="pulse-header">
-    <div>
-      <span class="section-label">02 / Live Traffic Pulse</span>
-      <p class="section-sub">Each spike is a scored connection. Height = anomaly risk, not packet size.</p>
-    </div>
-    <div class="controls">
-      <label class="ratio-control">
-        Attack mix
-        <input type="range" id="ratio-slider" min="0" max="80" value="30" />
-        <span id="ratio-label">30%</span>
-      </label>
-      <button id="toggle-btn" class="btn-primary">Pause Monitoring</button>
-    </div>
-  </div>
-  <canvas id="pulse-canvas"></canvas>
-</section>
-
-<section class="feed-section">
-  <span class="section-label">03 / Connection Feed</span>
-  <p class="section-sub">Live-scored traffic, most recent first. Click a row to see why it was flagged.</p>
-
-  <div class="feed-table">
-    <div class="feed-row feed-row--head">
-      <span>Risk</span>
-      <span>Protocol</span>
-      <span>Service</span>
-      <span>Flag</span>
-      <span>Bytes (src→dst)</span>
-      <span>Ground truth</span>
-    </div>
-    <div id="feed-body"></div>
-  </div>
-</section>
-
-<footer class="footer">
-  <p>Model: Isolation Forest trained exclusively on normal-traffic baselines · Dataset: NSL-KDD · Built for the SIH-style problem: detect compromise without relying only on Indicators of Compromise.</p>
-</footer>
+</div>
 
 <script src="app.js"></script>
 </body>

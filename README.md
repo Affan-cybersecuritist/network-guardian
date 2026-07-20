@@ -76,7 +76,7 @@ You'll never need to type the long multi-line commands below unless something br
 <summary>Manual step-by-step (only needed for debugging)</summary>
 
 ```bash
-pip install pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests
+pip install pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests shap
 python notebooks/train_model.py
 uvicorn backend.main:app --host 0.0.0.0 --port 8000   # terminal 1
 cd frontend && python -m http.server 8080              # terminal 2

@@ -23,7 +23,7 @@ import threading
 import time
 from collections import deque
 
-from scapy.all import AsyncSniffer, get_if_list
+from scapy.all import AsyncSniffer, get_if_list, conf
 
 from pcap_to_features import extract_connections_from_packets, compute_features
 
@@ -145,3 +145,24 @@ class LiveCapture:
 
 def list_interfaces():
     return get_if_list()
+
+
+def list_interfaces_detailed():
+    """Like list_interfaces() but with human-readable name/description attached,
+    e.g. {"device": "\\\\Device\\\\NPF_{...}", "name": "Wi-Fi", "description": "Intel(R) Wi-Fi 6E AX211"}
+    -- raw NPF device strings alone aren't usable in a UI dropdown."""
+    try:
+        result = []
+        for iface in conf.ifaces.values():
+            device = getattr(iface, "network_name", None) or getattr(iface, "name", None)
+            result.append({
+                "device": device,
+                "name": getattr(iface, "name", device),
+                "description": getattr(iface, "description", "") or "",
+            })
+        if result:
+            return result
+    except Exception:
+        pass
+    # Fallback: no friendly metadata available, just the raw device list
+    return [{"device": d, "name": d, "description": ""} for d in get_if_list()]

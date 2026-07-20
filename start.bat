@@ -5,7 +5,7 @@ REM Just double-click this file, or run it from Command Prompt: start.bat
 cd /d "%~dp0"
 
 echo Checking dependencies (this may take a minute the first time)...
-pip install -q pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests
+pip install -q pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests shap
 
 if not exist "models\isolation_forest.joblib" (
     echo No trained model found - training now, one-time, about 30 seconds...
