@@ -21,7 +21,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS scored_connections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at REAL NOT NULL,
-    source TEXT NOT NULL,          -- 'upload' | 'demo_scenario' | 'live'
+    source TEXT NOT NULL,          -- 'upload' | 'demo_scenario' | 'live' | 'replay'
     src_ip TEXT,
     dst_ip TEXT,
     dst_port INTEGER,

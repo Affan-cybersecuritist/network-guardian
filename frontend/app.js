@@ -616,7 +616,7 @@ document.querySelectorAll(".tilt-card").forEach(attachTilt);
 
 /* ============================== Live packet capture ============================== */
 const NOISY_ADAPTER_HINTS = ["loopback", "virtual", "bluetooth", "miniport", "vpn", "tap-"];
-const liveState = { running: false, socket: null, selectedRowId: null, cloudUnavailable: false };
+const liveState = { running: false, socket: null, selectedRowId: null, isReplay: false };
 
 function isLikelyRealAdapter(iface) {
   const haystack = `${iface.name} ${iface.description}`.toLowerCase();
@@ -628,16 +628,14 @@ async function loadInterfaces() {
     const res = await fetch(`${API_BASE}/interfaces`);
     const data = await res.json();
     if (data.cloud_deployment) {
-      el.ifaceSelect.innerHTML = `<option value="">Not available on this deployment</option>`;
-      el.ifaceSelect.disabled = true;
-      el.captureToggleBtn.disabled = true;
+      liveState.isReplay = true;
+      el.ifaceSelect.innerHTML = `<option value="replay">Replayed demo scenario</option>`;
       el.captureStatus.textContent =
-        "Live capture needs a real local network interface and OS-level privileges " +
-        "this cloud host doesn't have (and shouldn't be given) -- clone the repo and " +
-        "run it locally to use this feature. Everything else on this page runs for real.";
+        "This cloud host has no real network to sniff, so this replays the same " +
+        "canned attack scenario as “Simulate an attack” through the same live " +
+        "pipeline below -- scoring, SHAP, alerts all run for real on it. Genuine live " +
+        "capture only makes sense run locally, watching a real network.";
       el.captureStatus.className = "capture-status";
-      liveState.cloudUnavailable = true;
-      return;
     }
     const sorted = [...data.interfaces].sort((a, b) => isLikelyRealAdapter(b) - isLikelyRealAdapter(a));
     el.ifaceSelect.innerHTML = sorted
@@ -755,23 +753,33 @@ function connectLiveSocket() {
 }
 
 async function refreshCaptureStatus() {
-  if (liveState.cloudUnavailable) return;
   try {
     const res = await fetch(`${API_BASE}/live/status`);
     const data = await res.json();
     liveState.running = data.running;
-    el.captureToggleBtn.textContent = data.running ? "Stop live capture" : "Start live capture";
+    if (data.is_replay) liveState.isReplay = true;
+    const verb = liveState.isReplay ? "replay" : "live capture";
+    el.captureToggleBtn.textContent = data.running ? `Stop ${verb}` : `Start ${verb}`;
 
     if (data.error) {
       el.captureStatus.textContent = `Error: ${data.error}`;
       el.captureStatus.className = "capture-status is-error";
     } else if (data.running) {
-      el.captureStatus.textContent = `Capturing on ${data.interface || "default interface"} — ${data.packet_count} packets seen.`;
+      el.captureStatus.textContent = liveState.isReplay
+        ? `${data.interface} — ${data.packet_count} connections replayed so far.`
+        : `Capturing on ${data.interface || "default interface"} — ${data.packet_count} packets seen.`;
       el.captureStatus.className = "capture-status is-active";
       if (!liveState.socket || liveState.socket.readyState > WebSocket.OPEN) {
         connectLiveSocket();
       }
       updatePps(data.packet_count);
+    } else if (liveState.isReplay) {
+      el.captureStatus.textContent =
+        "This cloud host has no real network to sniff, so this replays the same " +
+        "canned attack scenario as “Simulate an attack” through the same live " +
+        "pipeline below -- click Start to stream it in. Genuine live capture only " +
+        "makes sense run locally, watching a real network.";
+      el.captureStatus.className = "capture-status";
     } else {
       el.captureStatus.textContent = "Not capturing.";
       el.captureStatus.className = "capture-status";

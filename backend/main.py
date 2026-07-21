@@ -32,6 +32,7 @@ sys.path.append(BACKEND_DIR)
 from data_prep import load_raw, transform
 from pcap_to_features import extract_connections, compute_features
 from live_capture import LiveCapture, list_interfaces_detailed
+from replay_capture import ReplayCapture
 import db as db_store
 import firewall
 import notifications
@@ -351,12 +352,12 @@ class LiveBroadcaster:
         for ws in dead:
             self.disconnect(ws)
 
-    def on_capture_results(self, feature_rows):
+    def on_capture_results(self, feature_rows, source="live"):
         """Called from the capture's background thread with new raw feature rows.
         Persists to the DB regardless of whether anyone's watching the dashboard --
         live capture keeps building alert history even with the browser tab closed."""
         try:
-            results = score_feature_rows(feature_rows, source="live")
+            results = score_feature_rows(feature_rows, source=source)
         except Exception as e:
             results = [{"error": f"{type(e).__name__}: {e}"}]
 
@@ -368,7 +369,23 @@ class LiveBroadcaster:
 
 
 broadcaster = LiveBroadcaster()
-live_capture = LiveCapture(on_results=broadcaster.on_capture_results)
+
+if IS_CLOUD_DEPLOYMENT:
+    # No real NIC to sniff in a container -- replay the same canned attack
+    # scenario /demo/simulate-attack uses, through the same live pipeline,
+    # clearly labeled as a replay (see ReplayCapture.status()/main.py's
+    # /interfaces). Precomputed once at startup since it's a fixed file.
+    try:
+        _demo_pcap = os.path.join(DATA_DIR, "test_traffic.pcap")
+        _replay_rows = compute_features(extract_connections(_demo_pcap)) if os.path.exists(_demo_pcap) else []
+    except Exception:
+        _replay_rows = []
+    live_capture = ReplayCapture(
+        on_results=lambda rows: broadcaster.on_capture_results(rows, source="replay"),
+        feature_rows=_replay_rows,
+    )
+else:
+    live_capture = LiveCapture(on_results=broadcaster.on_capture_results)
 
 
 @app.on_event("startup")
@@ -420,7 +437,15 @@ def get_interfaces():
     """List network interfaces available for live capture (requires Npcap on Windows),
     with human-readable name/description alongside the raw device string."""
     if IS_CLOUD_DEPLOYMENT:
-        return {"interfaces": [], "cloud_deployment": True}
+        return {
+            "interfaces": [{
+                "device": "replay",
+                "name": "Replayed demo scenario",
+                "description": "No real network to sniff on a cloud host -- replays the same canned attack scenario as 'Simulate an attack', through the same live pipeline",
+            }],
+            "cloud_deployment": True,
+            "is_replay": True,
+        }
     try:
         return {"interfaces": list_interfaces_detailed()}
     except Exception as e:
@@ -434,15 +459,6 @@ class LiveStartRequest(BaseModel):
 
 @app.post("/live/start")
 def live_start(req: LiveStartRequest):
-    if IS_CLOUD_DEPLOYMENT:
-        raise HTTPException(
-            status_code=400,
-            detail="Live packet capture needs a real network interface and OS-level "
-                   "privileges (Npcap + Administrator on Windows) that this cloud "
-                   "deployment doesn't have and shouldn't be given -- a container here "
-                   "would only see its own internal traffic, not a real network. "
-                   "Clone the repo and run it locally to use this feature.",
-        )
     try:
         live_capture.start(interface=req.interface, bpf_filter=req.bpf_filter)
     except (RuntimeError, ValueError) as e:
