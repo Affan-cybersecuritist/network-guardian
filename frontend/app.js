@@ -616,7 +616,7 @@ document.querySelectorAll(".tilt-card").forEach(attachTilt);
 
 /* ============================== Live packet capture ============================== */
 const NOISY_ADAPTER_HINTS = ["loopback", "virtual", "bluetooth", "miniport", "vpn", "tap-"];
-const liveState = { running: false, socket: null, selectedRowId: null };
+const liveState = { running: false, socket: null, selectedRowId: null, cloudUnavailable: false };
 
 function isLikelyRealAdapter(iface) {
   const haystack = `${iface.name} ${iface.description}`.toLowerCase();
@@ -627,6 +627,18 @@ async function loadInterfaces() {
   try {
     const res = await fetch(`${API_BASE}/interfaces`);
     const data = await res.json();
+    if (data.cloud_deployment) {
+      el.ifaceSelect.innerHTML = `<option value="">Not available on this deployment</option>`;
+      el.ifaceSelect.disabled = true;
+      el.captureToggleBtn.disabled = true;
+      el.captureStatus.textContent =
+        "Live capture needs a real local network interface and OS-level privileges " +
+        "this cloud host doesn't have (and shouldn't be given) -- clone the repo and " +
+        "run it locally to use this feature. Everything else on this page runs for real.";
+      el.captureStatus.className = "capture-status";
+      liveState.cloudUnavailable = true;
+      return;
+    }
     const sorted = [...data.interfaces].sort((a, b) => isLikelyRealAdapter(b) - isLikelyRealAdapter(a));
     el.ifaceSelect.innerHTML = sorted
       .map((iface) => {
@@ -743,6 +755,7 @@ function connectLiveSocket() {
 }
 
 async function refreshCaptureStatus() {
+  if (liveState.cloudUnavailable) return;
   try {
     const res = await fetch(`${API_BASE}/live/status`);
     const data = await res.json();

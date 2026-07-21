@@ -41,6 +41,16 @@ import response_engine
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 DATA_DIR = os.path.join(PROJECT_ROOT, "data")
 
+# Containers on cloud hosts often still have raw-socket capability, so a
+# scapy sniff on eth0/lo will actually "succeed" there -- but what it
+# captures is the container's own internal/orchestration traffic, not a
+# real network worth monitoring. That's more misleading than an outright
+# failure would be, so explicitly refuse rather than silently producing
+# noise dressed up as intrusion detection. `RENDER` is set automatically
+# on every Render service; IS_CLOUD_DEPLOYMENT is a manual override for
+# other hosts.
+IS_CLOUD_DEPLOYMENT = bool(os.environ.get("RENDER") or os.environ.get("IS_CLOUD_DEPLOYMENT"))
+
 app = FastAPI(title="Network Guardian API")
 app.add_middleware(
     CORSMiddleware,
@@ -409,6 +419,8 @@ def health():
 def get_interfaces():
     """List network interfaces available for live capture (requires Npcap on Windows),
     with human-readable name/description alongside the raw device string."""
+    if IS_CLOUD_DEPLOYMENT:
+        return {"interfaces": [], "cloud_deployment": True}
     try:
         return {"interfaces": list_interfaces_detailed()}
     except Exception as e:
@@ -422,6 +434,15 @@ class LiveStartRequest(BaseModel):
 
 @app.post("/live/start")
 def live_start(req: LiveStartRequest):
+    if IS_CLOUD_DEPLOYMENT:
+        raise HTTPException(
+            status_code=400,
+            detail="Live packet capture needs a real network interface and OS-level "
+                   "privileges (Npcap + Administrator on Windows) that this cloud "
+                   "deployment doesn't have and shouldn't be given -- a container here "
+                   "would only see its own internal traffic, not a real network. "
+                   "Clone the repo and run it locally to use this feature.",
+        )
     try:
         live_capture.start(interface=req.interface, bpf_filter=req.bpf_filter)
     except (RuntimeError, ValueError) as e:
