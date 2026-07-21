@@ -1,3 +1,0 @@
-# Railway will use railpack.json for build config
-[build]
-builder = "railpack"

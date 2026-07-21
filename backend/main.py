@@ -19,6 +19,7 @@ import shap
 import requests
 from fastapi import FastAPI, HTTPException, Query, UploadFile, File, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 
@@ -660,3 +661,26 @@ def simulate_attack():
         return analyze_pcap_file(demo_path, source="demo_scenario")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"pcap processing failed: {type(e).__name__}: {e}") from e
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """Plain StaticFiles lets browsers cache index.html/app.js/styles.css
+    indefinitely, which previously made real edits look like they 'weren't
+    working' until a hard tab close. This is a small personal demo, not a
+    high-traffic site -- there's no real benefit to caching worth that cost."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-store, no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        return response
+
+
+# Serve the dashboard from the same origin as the API -- registered last so
+# every /api-style route above still matches first; this becomes the fallback
+# for everything else (index.html, app.js, styles.css). Having one origin for
+# both means no CORS, and it's the only way most free hosts (one service =
+# one free instance) can serve this app for $0.
+FRONTEND_DIR = os.path.join(PROJECT_ROOT, "frontend")
+if os.path.isdir(FRONTEND_DIR):
+    app.mount("/", NoCacheStaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")

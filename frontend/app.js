@@ -1,4 +1,8 @@
-const API_BASE = "http://localhost:8000";
+// Relative on purpose: the backend now serves this dashboard itself (see the
+// StaticFiles mount at the bottom of backend/main.py), so API calls are
+// always same-origin -- no CORS, and it works unchanged whether this is
+// running locally or deployed to a free host under any domain.
+const API_BASE = "";
 
 const el = {
   bootOverlay: document.getElementById("boot-overlay"),
@@ -29,10 +33,10 @@ const el = {
   alertPanel: document.getElementById("alert-panel"),
   alertPanelList: document.getElementById("alert-panel-list"),
   alertPanelCount: document.getElementById("alert-panel-count"),
-  alertModalBackdrop: document.getElementById("alert-modal-backdrop"),
+  alertDetailPage: document.getElementById("alert-detail-page"),
+  alertDetailBack: document.getElementById("alert-detail-back"),
   alertModalTitle: document.getElementById("alert-modal-title"),
   alertModalBody: document.getElementById("alert-modal-body"),
-  alertModalClose: document.getElementById("alert-modal-close"),
   blockedBellBtn: document.getElementById("blocked-bell-btn"),
   blockedBadge: document.getElementById("blocked-badge"),
   blockedPanel: document.getElementById("blocked-panel"),
@@ -267,7 +271,18 @@ function openAlertModal(item) {
         : ""
     }
   `;
-  el.alertModalBackdrop.style.display = "grid";
+
+  // Close whatever dropdown was open (alerts/blocked/settings) before navigating --
+  // otherwise it stays open behind the full-page view and looks broken.
+  alertState.open = false;
+  el.alertPanel.style.display = "none";
+  blockedState.open = false;
+  el.blockedPanel.style.display = "none";
+  el.settingsPanel.style.display = "none";
+
+  el.alertDetailPage.style.display = "flex";
+  window.scrollTo(0, 0);
+  history.pushState({ guardianDetail: true }, "", "#alert");
 
   const blockBtn = document.getElementById("modal-block-btn");
   if (blockBtn && !alreadyBlocked) {
@@ -275,9 +290,17 @@ function openAlertModal(item) {
   }
 }
 
-el.alertModalClose.addEventListener("click", () => (el.alertModalBackdrop.style.display = "none"));
-el.alertModalBackdrop.addEventListener("click", (e) => {
-  if (e.target === el.alertModalBackdrop) el.alertModalBackdrop.style.display = "none";
+function closeAlertDetailPage() {
+  el.alertDetailPage.style.display = "none";
+  if (location.hash === "#alert") history.back();
+}
+
+el.alertDetailBack.addEventListener("click", closeAlertDetailPage);
+window.addEventListener("popstate", () => {
+  if (el.alertDetailPage.style.display !== "none") el.alertDetailPage.style.display = "none";
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && el.alertDetailPage.style.display !== "none") closeAlertDetailPage();
 });
 
 el.alertBellBtn.addEventListener("click", () => {
@@ -476,16 +499,29 @@ async function hydrateFromHistory() {
 }
 
 /* ============================== Boot sequence ============================== */
+// Never let a slow/hanging backend call keep the full-screen boot overlay up
+// forever (it would silently block every click behind it). Each network step
+// below is capped, and there's a hard overall ceiling that force-hides the
+// overlay no matter what.
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(null), ms)),
+  ]);
+}
+
 async function runBoot() {
   const setBoot = (pct, label) => {
     el.bootFill.style.width = `${pct}%`;
     el.bootLabel.textContent = label;
   };
+  const hardCeiling = setTimeout(() => el.bootOverlay.classList.add("hidden"), 8000);
+
   setBoot(8, "Loading model artifacts…");
   let metrics = null;
   try {
-    const res = await fetch(`${API_BASE}/metrics`);
-    metrics = await res.json();
+    const res = await withTimeout(fetch(`${API_BASE}/metrics`), 4000);
+    if (res) metrics = await res.json();
   } catch (e) {
     // handled by the header status indicator instead
   }
@@ -493,22 +529,24 @@ async function runBoot() {
   await sleep(220);
   setBoot(65, "Calibrating anomaly thresholds…");
   try {
-    await loadInterfaces();
+    await withTimeout(loadInterfaces(), 4000);
   } catch (e) {}
   setBoot(82, "Loading alert history…");
   try {
-    await hydrateFromHistory();
-    await loadBlockedIps();
-    await loadWebhookSettings();
-    await initDesktopToggle();
+    await withTimeout(
+      Promise.all([hydrateFromHistory(), loadBlockedIps(), loadWebhookSettings(), initDesktopToggle()]),
+      4000
+    );
   } catch (e) {}
   setBoot(90, "Ready.");
   await sleep(200);
   setBoot(100, "Ready.");
   await sleep(250);
+  clearTimeout(hardCeiling);
   el.bootOverlay.classList.add("hidden");
 
   if (metrics) applyMetrics(metrics);
+  else fetchMetrics();
 }
 
 /* ============================== Metrics (hero) ============================== */
@@ -922,8 +960,10 @@ const PIPELINE = [
   { n: "CAPTURE", title: "Packets", sub: "scapy AsyncSniffer / pcap upload" },
   { n: "EXTRACT", title: "41 + 1 features", sub: "NSL-KDD flow features + brute-force score" },
   { n: "PREP", title: "Encode + scale", sub: "same artifacts as training" },
-  { n: "SCORE", title: "Isolation Forest", sub: "trained on normal traffic only" },
-  { n: "DECIDE", title: "Verdict + rules", sub: "force-flag layer · reasons via WebSocket" },
+  { n: "SCORE", title: "Isolation Forest (ML)", sub: "unsupervised model, trained on normal traffic only" },
+  { n: "EXPLAIN", title: "SHAP attribution", sub: "per-connection feature importance, not a black box" },
+  { n: "ENRICH", title: "WAF + threat intel", sub: "payload rule engine + IP reputation lookup" },
+  { n: "DECIDE", title: "Verdict + response", sub: "force-flag rules · auto-response engine · WebSocket" },
 ];
 
 function renderPipeline() {

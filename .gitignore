@@ -3,4 +3,3 @@ __pycache__/
 *.pyo
 .DS_Store
 data/guardian.db
-start.bat

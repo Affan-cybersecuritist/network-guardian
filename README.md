@@ -1,4 +1,17 @@
+---
+title: Network Guardian
+emoji: 🛡️
+colorFrom: orange
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Network Guardian — AI-Powered Intrusion Detection
+
+**[Live demo →](#)** <!-- replace # with your deployed URL once live -->
+
 
 An anomaly-based network intrusion detector that flags compromised systems **without relying only on known Indicators of Compromise (IoCs)** — built in response to a real Smart India Hackathon-style problem statement from India's National Technical Research Organisation (NTRO).
 
@@ -47,41 +60,73 @@ network-guardian/
 
 ## Running it locally (the easy way)
 
+One process serves both the API and the dashboard — `backend/main.py` mounts `frontend/`
+as static files, so there's a single port and no CORS to think about.
+
 **If you're on Windows**, use the `.bat` files (double-click them, or run from Command Prompt):
 ```
-start.bat     <- starts everything (two new windows will open, keep them open)
+start.bat     <- installs deps, trains the model if needed, starts the server, opens the browser
 test.bat      <- checks everything is working
-stop.bat      <- stops both servers
+stop.bat      <- stops the server
 ```
 
 **If you're on Mac or Linux**, use the `.sh` files from a terminal:
 ```bash
-./start.sh    # starts everything (installs deps + trains model first time, then launches both servers)
+./start.sh    # installs deps + trains model first time, then launches the server
 ```
-Then open **http://localhost:8080** in your browser. That's it — the dashboard is your test. Watch the live feed, click rows to see why things get flagged, or use the "Analyze Real Traffic" upload button.
+Then open **http://localhost:8000** in your browser. That's it — the dashboard is your test. Watch the live feed, click rows to see why things get flagged, or use the "Analyze Real Traffic" upload button.
 
 When you're done:
 ```bash
-./stop.sh     # stops both servers cleanly
+./stop.sh     # stops the server cleanly
 ```
 
-Any time you want to double-check everything still works without opening the dashboard (e.g. after changing code), run this in a **second terminal** while `start.sh` is still running in the first:
+Any time you want to double-check everything still works without opening the dashboard (e.g. after changing code), run this in a **second terminal** while the server is still running in the first:
 ```bash
 ./test.sh     # checks the API, prints model accuracy, and scores a real test capture
 ```
 
-You'll never need to type the long multi-line commands below unless something breaks and you want to debug manually — `start.sh`/`start.bat` already does all of it for you.
+You'll never need to type the commands below unless something breaks and you want to debug manually — `start.sh`/`start.bat` already does all of it for you.
 
 <details>
 <summary>Manual step-by-step (only needed for debugging)</summary>
 
 ```bash
-pip install pandas numpy scikit-learn joblib fastapi uvicorn websockets python-multipart scapy requests shap
+pip install -r requirements.txt
 python notebooks/train_model.py
-uvicorn backend.main:app --host 0.0.0.0 --port 8000   # terminal 1
-cd frontend && python -m http.server 8080              # terminal 2
+uvicorn backend.main:app --host 0.0.0.0 --port 8000
+# open http://localhost:8000
 ```
 </details>
+
+## Deploying your own copy for free
+
+The whole app is one Docker container (`Dockerfile` at the repo root) — API and
+dashboard together, no separate frontend host needed. Two options that don't
+require a credit card:
+
+**Hugging Face Spaces** (recommended — built for hosting ML demos):
+1. Create a new Space at [huggingface.co/new-space](https://huggingface.co/new-space), SDK = **Docker**.
+2. Push this repo to it: `git remote add space https://huggingface.co/spaces/<you>/<space-name>` then `git push space main`.
+3. The Space reads the YAML block at the top of this README to configure itself — no extra setup.
+
+**Render.com** (free Web Service tier):
+1. New → Web Service → connect your GitHub repo → Environment = **Docker**.
+2. Nothing else to configure — Render injects `$PORT` and the `Dockerfile` picks it up automatically.
+
+Both free tiers sleep after a period of inactivity and wake up on the next visit
+(expect a ~30s cold start on the first request after idling).
+
+### What won't work on a cloud deployment (by design, not a bug)
+
+**Live packet capture** and **firewall blocking** need a real, addressable network
+interface and OS-level privileges (Npcap + Administrator on Windows) that no
+container on a shared cloud host has or should have. Everything else —
+model metrics, SHAP explainability, pcap upload/analysis, the WAF/threat-intel/
+brute-force detection layers, and the one-click "Simulate an attack" demo — runs
+identically in the cloud, since those only need the uploaded/canned packet data,
+not a live NIC. This mirrors real-world IDS deployment: sensors run on the
+network they're protecting, not on a random cloud VM.
 
 ## Live packet capture (real-time, not just uploaded files)
 
@@ -129,7 +174,7 @@ throttled login attempts from one source) you can regenerate and test against wi
 
 This is the part that makes the project genuinely work on "outside data," not just the static NSL-KDD test set.
 
-**Easiest way:** open the dashboard (`./start.sh`, then `http://localhost:8080`) and click **"Upload Capture"** in the "Analyze Real Traffic" section. Pick any `.pcap`/`.pcapng` file.
+**Easiest way:** open the dashboard (`./start.sh`, then `http://localhost:8000`) and click **"Upload Capture"** in the "Analyze Real Traffic" section. Pick any `.pcap`/`.pcapng` file.
 
 You can capture your own traffic with `tcpdump -w capture.pcap` or Wireshark.
 
@@ -153,9 +198,18 @@ This isn't a shortcut specific to this project — it's a well-documented, known
 - The `/analyze-pcap` endpoint and the "01 / Live Packet Capture" section both run on **actual packets** — captured live or uploaded — this is the real "outside data" pathway.
 - Content/host features in pcap- and live-derived rows are 0 by design (see table above) — disclosed via the `note` field in the API response and in the dashboard UI.
 
+## Beyond the core model
+
+A few layers now sit on top of the Isolation Forest, all visible in the dashboard header:
+
+- **SHAP** (`shap.TreeExplainer`) — per-connection feature attribution, so every flag comes with *which* features drove it, not just a score.
+- **WAF engine** (`backend/waf_engine.py`) — inspects HTTP request content for injection/XSS-style payloads independently of the flow-based model.
+- **Threat intel lookup** — checks source IPs against AbuseIPDB reputation data.
+- **Auto-response engine** (`backend/response_engine.py`) — policy-driven simulated response actions on high-risk detections.
+- **SQLite persistence** (`backend/db.py`) — alert history and live-capture results survive restarts and page reloads, not just in-memory.
+
 ## Next steps to extend this
 
 - Swap Isolation Forest for an autoencoder to compare performance
-- Add SHAP-based explainability instead of the current rule-based "reasons"
-- Persist live-captured connections (currently in-memory only) for later review
 - Add authentication + role-based access if deploying beyond a demo
+- Real firewall auto-blocking currently requires local Windows Administrator — a Linux/iptables equivalent would let it run unattended on a real network sensor
