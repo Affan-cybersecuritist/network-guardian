@@ -1,16 +1,7 @@
----
-title: Network Guardian
-emoji: 🛡️
-colorFrom: orange
-colorTo: green
-sdk: docker
-app_port: 7860
-pinned: false
----
-
 # Network Guardian — AI-Powered Intrusion Detection
 
-**[Live demo →](#)** <!-- replace # with your deployed URL once live -->
+**[Live demo →](https://network-guardian-2.onrender.com/)**
+*(free-tier hosting — sleeps after 15 min idle, first load after that takes ~30-50s to wake up)*
 
 
 An anomaly-based network intrusion detector that flags compromised systems **without relying only on known Indicators of Compromise (IoCs)** — built in response to a real Smart India Hackathon-style problem statement from India's National Technical Research Organisation (NTRO).
@@ -102,20 +93,19 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000
 ## Deploying your own copy for free
 
 The whole app is one Docker container (`Dockerfile` at the repo root) — API and
-dashboard together, no separate frontend host needed. Two options that don't
-require a credit card:
+dashboard together, no separate frontend host needed.
 
-**Hugging Face Spaces** (recommended — built for hosting ML demos):
-1. Create a new Space at [huggingface.co/new-space](https://huggingface.co/new-space), SDK = **Docker**.
-2. Push this repo to it: `git remote add space https://huggingface.co/spaces/<you>/<space-name>` then `git push space main`.
-3. The Space reads the YAML block at the top of this README to configure itself — no extra setup.
-
-**Render.com** (free Web Service tier):
+**Render.com** (free Web Service tier, no credit card):
 1. New → Web Service → connect your GitHub repo → Environment = **Docker**.
-2. Nothing else to configure — Render injects `$PORT` and the `Dockerfile` picks it up automatically.
+2. Instance type = **Free**. Nothing else to configure — Render injects `$PORT` and the `Dockerfile` picks it up automatically.
 
-Both free tiers sleep after a period of inactivity and wake up on the next visit
-(expect a ~30s cold start on the first request after idling).
+(Hugging Face Spaces looks like a natural fit for an ML demo like this, but as of
+this writing Docker-based Spaces require a paid PRO plan — only their zero-backend
+"Static" SDK is free, which can't run this app. Render's free tier is the one
+that's actually free.)
+
+The free tier sleeps after ~15 minutes of inactivity and wakes on the next visit
+(expect a ~30-50s cold start on the first request after idling).
 
 ### What won't work on a cloud deployment (by design, not a bug)
 
